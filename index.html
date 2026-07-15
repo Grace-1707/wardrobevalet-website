@@ -234,7 +234,7 @@
 <main id="top">
 
   <!-- HERO -->
-  <section class="hero">
+  <section class="hero" data-section="hero">
     <div class="wrap">
       <span class="eyebrow">Bedfordshire · Hertfordshire · Cambridgeshire</span>
       <h1>Your Wardrobe, Reimagined</h1>
@@ -254,7 +254,7 @@
   </div>
 
   <!-- SERVICES -->
-  <section class="services" id="services">
+  <section class="services" id="services" data-section="services">
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">What we do</span>
@@ -281,7 +281,7 @@
   </section>
 
   <!-- PRICING -->
-  <section class="pricing" id="pricing">
+  <section class="pricing" id="pricing" data-section="pricing">
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">Pricing</span>
@@ -317,7 +317,7 @@
   </div>
 
   <!-- HOW IT WORKS -->
-  <section class="how" id="how">
+  <section class="how" id="how" data-section="how">
     <div class="wrap">
       <div class="section-head">
         <span class="eyebrow">How it works</span>
@@ -350,7 +350,7 @@
   </div>
 
   <!-- ABOUT -->
-  <section class="about" id="about">
+  <section class="about" id="about" data-section="about">
     <div class="wrap about-grid">
       <div class="about-photo">
         <div class="mono">WV</div>
@@ -365,14 +365,14 @@
   </section>
 
   <!-- POSITIONING BANNER -->
-  <section class="banner">
+  <section class="banner" data-section="banner">
     <div class="wrap">
       <p>&ldquo;A friendly hand through the edit, and a fair price for what you let go.&rdquo;</p>
     </div>
   </section>
 
   <!-- CONTACT -->
-  <section class="contact" id="contact">
+  <section class="contact" id="contact" data-section="contact">
     <div class="wrap">
       <span class="eyebrow">Get in touch</span>
       <h2>Let's take a look at your wardrobe</h2>
@@ -412,6 +412,161 @@
     </div>
   </div>
 </footer>
+
+<!--
+  Engagement beacon — measures how far down the page visitors actually read.
+  Privacy: no cookies and no device storage of any kind, so it needs no consent
+  banner under PECR. The visit id lives in a JS variable for the life of the
+  page load only. The server records country (from Cloudflare) but never the IP
+  or user-agent string. Honours Do Not Track. Collected by the /px route of the
+  wardrobevalet-analytics Worker.
+-->
+<script>
+(function () {
+  if (!window.IntersectionObserver || !navigator.sendBeacon) return;
+  if (navigator.doNotTrack === "1" || window.doNotTrack === "1") return;
+
+  var nodes = document.querySelectorAll("[data-section]");
+  if (!nodes.length) return;
+
+  // Random per-page-load id, kept in memory and never persisted. Lets repeat
+  // beacons from one visit (a mobile tab switch sends an early one) overwrite
+  // the previous row server-side rather than double-count as a second visit.
+  var vid = window.crypto && crypto.randomUUID
+    ? crypto.randomUUID()
+    : String(Math.random()).slice(2) + Date.now().toString(36);
+
+  var maxScroll = 0;
+  var dwellMs = 0;
+  var visibleSince = document.visibilityState === "visible" ? performance.now() : null;
+  // Per section: `reading` is what the observer last saw, `since` is when the
+  // clock started. They differ while the tab is hidden — a section can still be
+  // on screen with its clock stopped.
+  var sections = {};
+  nodes.forEach(function (n) {
+    sections[n.getAttribute("data-section")] = { ms: 0, since: null, reading: false };
+  });
+
+  // Time with the tab actually in the foreground — a page left open in a
+  // background tab shouldn't read as an hour of rapt attention.
+  function activeMs() {
+    return dwellMs + (visibleSince === null ? 0 : performance.now() - visibleSince);
+  }
+
+  function pauseSections(now) {
+    Object.keys(sections).forEach(function (key) {
+      var rec = sections[key];
+      if (rec.since !== null) { rec.ms += now - rec.since; rec.since = null; }
+    });
+  }
+
+  function resumeSections(now) {
+    Object.keys(sections).forEach(function (key) {
+      var rec = sections[key];
+      if (rec.reading) rec.since = now;
+    });
+  }
+
+  function measureScroll() {
+    var docH = document.documentElement.scrollHeight;
+    var viewH = window.innerHeight;
+    var pct = docH <= viewH ? 100 : Math.round(((window.scrollY + viewH) / docH) * 100);
+    if (pct > maxScroll) maxScroll = Math.min(pct, 100);
+  }
+
+  var ticking = false;
+  addEventListener("scroll", function () {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () { measureScroll(); ticking = false; });
+  }, { passive: true });
+  addEventListener("resize", measureScroll, { passive: true });
+  measureScroll();
+
+  // A section counts as "being read" when half of it is on screen, OR when it
+  // fills half the viewport — the second test is what makes tall sections work,
+  // since on a phone they can never be 50% visible at once.
+  var thresholds = [];
+  for (var i = 0; i <= 20; i++) thresholds.push(i / 20);
+
+  var io = new IntersectionObserver(function (entries) {
+    var now = performance.now();
+    entries.forEach(function (entry) {
+      var rec = sections[entry.target.getAttribute("data-section")];
+      if (!rec) return;
+      var box = entry.boundingClientRect;
+      var shown = entry.intersectionRect.height;
+      var ofSection = box.height ? shown / box.height : 0;
+      var ofViewport = window.innerHeight ? shown / window.innerHeight : 0;
+      var reading = entry.isIntersecting && (ofSection >= 0.5 || ofViewport >= 0.5);
+      rec.reading = reading;
+
+      // Only run the clock while the tab is in the foreground, so a section
+      // left on screen in a hidden tab doesn't bank time nobody spent reading.
+      if (reading && rec.since === null && document.visibilityState === "visible") {
+        rec.since = now;
+      } else if (!reading && rec.since !== null) {
+        rec.ms += now - rec.since;
+        rec.since = null;
+      }
+    });
+  }, { threshold: thresholds });
+
+  nodes.forEach(function (n) { io.observe(n); });
+
+  function snapshot() {
+    var now = performance.now();
+    var out = {};
+    Object.keys(sections).forEach(function (key) {
+      var rec = sections[key];
+      var total = rec.ms + (rec.since === null ? 0 : now - rec.since);
+      out[key] = Math.round(total);
+    });
+    return out;
+  }
+
+  function flush() {
+    measureScroll();
+    var ref = "";
+    try {
+      if (document.referrer) {
+        var host = new URL(document.referrer).hostname;
+        if (host && host !== location.hostname) ref = host;
+      }
+    } catch (e) { /* malformed referrer — send none */ }
+
+    var payload = {
+      v: 1,
+      vid: vid,
+      path: location.pathname,
+      ref: ref,
+      vw: window.innerWidth,
+      maxScroll: maxScroll,
+      dwellMs: Math.round(activeMs()),
+      sections: snapshot()
+    };
+    // text/plain keeps this a CORS-simple request, so there's no preflight.
+    // /px is routed on both the apex and www, so it's same-origin either way.
+    try {
+      navigator.sendBeacon("/px", new Blob([JSON.stringify(payload)], { type: "text/plain" }));
+    } catch (e) { /* never let analytics break the page */ }
+  }
+
+  addEventListener("visibilitychange", function () {
+    var now = performance.now();
+    if (document.visibilityState === "hidden") {
+      if (visibleSince !== null) { dwellMs += now - visibleSince; visibleSince = null; }
+      pauseSections(now);
+      flush();
+    } else {
+      if (visibleSince === null) visibleSince = now;
+      resumeSections(now);
+    }
+  });
+  // pagehide covers desktop navigations that never fire visibilitychange.
+  addEventListener("pagehide", flush);
+})();
+</script>
 
 </body>
 </html>
